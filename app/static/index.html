@@ -2563,49 +2563,81 @@
         document.body.style.overflow = "";
       }
 
-      /* ─── Featured section — live top-rated picks ─────────────────── */
+      /* ─── Featured section — curated picks with reliable images ─────── */
+      // Maps the human-readable category string from FEATURED to a label key
+      // so we can pick the right SVG fallback when the Wikipedia image fails.
+      const FEAT_CAT_TO_LABEL = {
+        "Nature": "nature",
+        "Heritage": "historical",
+        "Mountain": "mountain",
+        "City": "urban",
+        "Food & Culture": "food",
+        "Adventure": "adventure",
+        "Beach": "relax",
+        "Rural": "rural",
+      };
+
       async function renderFeatured() {
         const grid = $("feat-grid");
         grid.innerHTML = '<div class="state-box"><div class="loading-dots"><div class="ld"></div><div class="ld"></div><div class="ld"></div></div><p class="state-sub">Loading curated picks…</p></div>';
-        try {
-          const data = await apiRecommend("", [], "", 6);
-          const recs = (data.recommendations || []).slice(0, 6);
-          if (!recs.length) { grid.innerHTML = ""; return; }
-          grid.innerHTML = recs.map((result) => {
-            const p = result.place;
-            const cat = result.matched_labels && result.matched_labels.length ? result.matched_labels[0] : primaryLabel(p);
-            const tags = (p.keywords || []).slice(0, 3);
-            const tagsHtml = tags.map((t) => `<span class="feat-tag">${esc(t)}</span>`).join("");
-            const imgSrc = imageSrcForPlace(p);
-            const fbSrc  = fallbackImageForPlace(p);
-            return [
-              '<div class="feat-card">',
-              '  <div class="feat-img-wrap">',
-              `    <img class="feat-img" src="${esc(imgSrc)}" alt="${esc(p.name)}" loading="lazy" referrerpolicy="no-referrer" onerror="safeImageFallback(this,'${esc(fbSrc)}')">`,
-              '    <div class="feat-overlay">',
-              `      <div class="feat-loc">📍 ${esc(p.location)}</div>`,
-              `      <div class="feat-tags">${tagsHtml}</div>`,
-              '    </div>',
-              '  </div>',
-              '  <div class="feat-body">',
-              `    <div class="feat-title">${esc(p.name)}</div>`,
-              `    <div class="feat-desc">${esc(trunc(p.description, 110))}</div>`,
-              '    <div class="feat-foot">',
-              '      <div>',
-              `        <div class="feat-rating"><span style="color:var(--gold)">★</span>${p.rating > 0 ? p.rating.toFixed(1) : "—"}</div>`,
-              `        <div class="feat-price">${esc(cat)}</div>`,
-              '      </div>',
-              '      <div class="feat-actions">',
-              `        <button class="btn-detail" onclick="openModal('${esc(p.id)}')">Details</button>`,
-              '      </div>',
-              '    </div>',
-              '  </div>',
-              '</div>',
-            ].join("\n");
-          }).join("\n");
-        } catch {
-          grid.innerHTML = "";
-        }
+
+        // For each entry in FEATURED, try to resolve it to a real database place
+        // via /place/search so the Details button can use the actual place_XXX id.
+        // Individual search failures are caught — a null placeId just hides the
+        // Details button for that card rather than breaking the whole section.
+        const resolved = await Promise.all(
+          FEATURED.map(async (f) => {
+            const searchTerm = f.searchKey || f.name;
+            try {
+              const resp = await fetch(
+                `${API_BASE}/place/search?q=${encodeURIComponent(searchTerm)}`
+              );
+              if (resp.ok) {
+                const place = await resp.json();
+                return { f, placeId: place.id };
+              }
+            } catch { /* network error — keep placeId null */ }
+            return { f, placeId: null };
+          })
+        );
+
+        if (!resolved.length) { grid.innerHTML = ""; return; }
+
+        grid.innerHTML = resolved.map(({ f, placeId }) => {
+          const labelKey = FEAT_CAT_TO_LABEL[f.cat] || "default";
+          const fbSrc = FALLBACK_IMAGE_BY_LABEL[labelKey] || FALLBACK_IMAGE_BY_LABEL.default;
+          const tagsHtml = (f.tags || []).slice(0, 3)
+            .map((t) => `<span class="feat-tag">${esc(t)}</span>`).join("");
+          // Only render a Details button when we have a valid database id.
+          const detailsBtn = placeId
+            ? `<button class="btn-detail" onclick="openModal('${esc(placeId)}','${esc(f.name)}')">Details</button>`
+            : "";
+          return [
+            '<div class="feat-card">',
+            '  <div class="feat-img-wrap">',
+            // Use the hand-picked Wikipedia image from FEATURED as the primary
+            // source — these URLs are stable and show real photos. The SVG
+            // fallback fires only if Wikipedia is unreachable.
+            `    <img class="feat-img" src="${esc(f.img)}" alt="${esc(f.name)}" loading="lazy" referrerpolicy="no-referrer" onerror="safeImageFallback(this,'${esc(fbSrc)}')">`,
+            '    <div class="feat-overlay">',
+            `      <div class="feat-loc">📍 ${esc(f.loc)}</div>`,
+            `      <div class="feat-tags">${tagsHtml}</div>`,
+            '    </div>',
+            '  </div>',
+            '  <div class="feat-body">',
+            `    <div class="feat-title">${esc(f.name)}</div>`,
+            `    <div class="feat-desc">${esc(trunc(f.desc, 110))}</div>`,
+            '    <div class="feat-foot">',
+            '      <div>',
+            `        <div class="feat-rating"><span style="color:var(--gold)">★</span>${typeof f.rating === "number" ? f.rating.toFixed(1) : "—"}</div>`,
+            `        <div class="feat-price">${esc(f.cat)}</div>`,
+            '      </div>',
+            `      <div class="feat-actions">${detailsBtn}</div>`,
+            '    </div>',
+            '  </div>',
+            '</div>',
+          ].join("\n");
+        }).join("\n");
       }
 
       /* ─── Sync UI helpers ────────────────────────────────────────────────── */
