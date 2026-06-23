@@ -2565,7 +2565,7 @@
 
       /* ─── Featured section — curated picks with reliable images ─────── */
       // Maps the human-readable category string from FEATURED to a label key
-      // so we can pick the right SVG fallback when the Wikipedia image fails.
+      // so we can pick the right SVG fallback when all image sources fail.
       const FEAT_CAT_TO_LABEL = {
         "Nature": "nature",
         "Heritage": "historical",
@@ -2581,10 +2581,11 @@
         const grid = $("feat-grid");
         grid.innerHTML = '<div class="state-box"><div class="loading-dots"><div class="ld"></div><div class="ld"></div><div class="ld"></div></div><p class="state-sub">Loading curated picks…</p></div>';
 
-        // For each entry in FEATURED, try to resolve it to a real database place
-        // via /place/search so the Details button can use the actual place_XXX id.
-        // Individual search failures are caught — a null placeId just hides the
-        // Details button for that card rather than breaking the whole section.
+        // For each FEATURED item, search the dataset by name/searchKey.
+        // The Place object the API returns already has image_url set by
+        // data_loader.py — we just use that directly. No external image
+        // calls, no proxies, no Wikipedia. If the URL is broken the
+        // existing onerror → SVG fallback handles it automatically.
         const resolved = await Promise.all(
           FEATURED.map(async (f) => {
             const searchTerm = f.searchKey || f.name;
@@ -2594,31 +2595,29 @@
               );
               if (resp.ok) {
                 const place = await resp.json();
-                return { f, placeId: place.id };
+                return { f, placeId: place.id, imgSrc: place.image_url || null };
               }
-            } catch { /* network error — keep placeId null */ }
-            return { f, placeId: null };
+            } catch { /* server unavailable */ }
+            return { f, placeId: null, imgSrc: null };
           })
         );
 
         if (!resolved.length) { grid.innerHTML = ""; return; }
 
-        grid.innerHTML = resolved.map(({ f, placeId }) => {
-          const labelKey = FEAT_CAT_TO_LABEL[f.cat] || "default";
-          const fbSrc = FALLBACK_IMAGE_BY_LABEL[labelKey] || FALLBACK_IMAGE_BY_LABEL.default;
-          const tagsHtml = (f.tags || []).slice(0, 3)
-            .map((t) => `<span class="feat-tag">${esc(t)}</span>`).join("");
-          // Only render a Details button when we have a valid database id.
+        grid.innerHTML = resolved.map(({ f, placeId, imgSrc }) => {
+          const labelKey  = FEAT_CAT_TO_LABEL[f.cat] || "default";
+          const fbSrc     = FALLBACK_IMAGE_BY_LABEL[labelKey] || FALLBACK_IMAGE_BY_LABEL.default;
+          // Use dataset image if we got one, otherwise fall straight to SVG.
+          const cardImg   = imgSrc || fbSrc;
+          const tagsHtml  = (f.tags || []).slice(0, 3)
+            .map(t => `<span class="feat-tag">${esc(t)}</span>`).join("");
           const detailsBtn = placeId
             ? `<button class="btn-detail" onclick="openModal('${esc(placeId)}','${esc(f.name)}')">Details</button>`
             : "";
           return [
             '<div class="feat-card">',
             '  <div class="feat-img-wrap">',
-            // Use the hand-picked Wikipedia image from FEATURED as the primary
-            // source — these URLs are stable and show real photos. The SVG
-            // fallback fires only if Wikipedia is unreachable.
-            `    <img class="feat-img" src="${esc(f.img)}" alt="${esc(f.name)}" loading="lazy" referrerpolicy="no-referrer" onerror="safeImageFallback(this,'${esc(fbSrc)}')">`,
+            `    <img class="feat-img" src="${esc(cardImg)}" alt="${esc(f.name)}" loading="lazy" onerror="safeImageFallback(this,'${esc(fbSrc)}')">`,
             '    <div class="feat-overlay">',
             `      <div class="feat-loc">📍 ${esc(f.loc)}</div>`,
             `      <div class="feat-tags">${tagsHtml}</div>`,
